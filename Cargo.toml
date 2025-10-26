@@ -1,0 +1,15 @@
+[package]
+name = "polyomino"
+version = "0.1.0"
+authors = ["Kim Georg Lind Pedersen <georglind@gmail.com>"]
+description = "Solve polyomino puzzles using Knuth's Dancing Links"
+edition = "2024"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+algox = { path = "../algox" }
+wasm-bindgen = "0.2.100"
+
+
