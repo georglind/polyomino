@@ -1,4 +1,5 @@
 use crate::parser::parse;
+use algox::algox::IterativeSolver;
 use algox::algox::Matrix;
 use std::collections::HashSet;
 use std::ops;
@@ -211,9 +212,70 @@ impl Tile {
     }
 }
 
+// build matrix structure from the existing board and tiles
+fn build_matrix(board: &Tile, tiles: &Vec<Tile>) -> Matrix {
+    let n_cols = board.len() + tiles.len();
+    let mut m = Matrix::new(n_cols);
+
+    let mut uniqs: HashSet<(Tile, usize)> = HashSet::new();
+    for (index, tile) in tiles.iter().enumerate() {
+        let mut t = tile.clone();
+        for o in 0..8 {
+            t.rotate();
+            if o == 4 {
+                t.mirror();
+            }
+            t.translate(&-t.offset());
+            t.points.sort();
+
+            uniqs.insert((t.clone(), index));
+        }
+    }
+
+    // hash set of board points for easy checking
+    let board_points: HashSet<Point> = HashSet::from_iter(board.points.iter().cloned());
+    let size = board.size();
+
+    // order tiles predictably
+    let mut uniqs = Vec::from_iter(uniqs.iter());
+    uniqs.sort();
+
+    for (tile, index) in uniqs.iter() {
+        let mut t = tile.clone();
+        for i in 0..isize::try_from(size.width).unwrap() {
+            for j in 0..isize::try_from(size.height).unwrap() {
+                t.translate(&(Point::new(i, j) - t.offset()));
+
+                let mut contains = true;
+                for point in &t.points {
+                    if !board_points.contains(&point) {
+                        contains = false;
+                        break;
+                    }
+                }
+                if !contains {
+                    continue;
+                }
+
+                // build row
+                let mut row = Vec::with_capacity(t.points.len() + 1);
+                for point in &t.points {
+                    let p = board.index(&point).unwrap();
+                    row.push(p);
+                }
+                row.push(board.len() + index);
+
+                m.add_row(&row);
+            }
+        }
+    }
+    return m;
+}
+
 pub struct Game {
     board: Tile,
     tiles: Vec<Tile>,
+    solver: IterativeSolver,
 }
 
 impl Game {
@@ -233,9 +295,11 @@ impl Game {
                 }
             }
         }
+        let matrix = build_matrix(&board, &tiles);
         Self {
             board: board,
             tiles: tiles,
+            solver: IterativeSolver::new(matrix),
         }
     }
 
@@ -243,87 +307,27 @@ impl Game {
         self.board.points.len()
     }
 
-    // Build our data structure from the existing game.
-    pub fn build_matrix(&mut self) -> Matrix {
-        let n_cols = self.board.len() + self.tiles.len();
-        let mut m = Matrix::new(n_cols);
-
-        let mut uniqs: HashSet<(Tile, usize)> = HashSet::new();
-        for (index, tile) in self.tiles.iter().enumerate() {
-            let mut t = tile.clone();
-            for o in 0..8 {
-                t.rotate();
-                if o == 4 {
-                    t.mirror();
-                }
-                t.translate(&-t.offset());
-                t.points.sort();
-
-                uniqs.insert((t.clone(), index));
-            }
-        }
-
-        // hash set of board points for easy checking
-        let board_points: HashSet<Point> = HashSet::from_iter(self.board.points.iter().cloned());
-        let size = self.board.size();
-
-        // order tiles predictably
-        let mut uniqs = Vec::from_iter(uniqs.iter());
-        uniqs.sort();
-
-        for (tile, index) in uniqs.iter() {
-            let mut t = tile.clone();
-            for i in 0..isize::try_from(size.width).unwrap() {
-                for j in 0..isize::try_from(size.height).unwrap() {
-                    t.translate(&(Point::new(i, j) - t.offset()));
-
-                    let mut contains = true;
-                    for point in &t.points {
-                        if !board_points.contains(&point) {
-                            contains = false;
-                            break;
-                        }
-                    }
-                    if !contains {
-                        continue;
-                    }
-
-                    // build row
-                    let mut row = Vec::with_capacity(t.points.len() + 1);
-                    for point in &t.points {
-                        let p = self.board.index(&point).unwrap();
-                        row.push(p);
-                    }
-                    row.push(self.board.len() + index);
-
-                    m.add_row(&row);
-                }
-            }
-        }
-        return m;
+    pub fn solve(&mut self) -> Option<Vec<usize>> {
+        self.solver.next()
     }
 
-    pub fn solve(&mut self) -> (Matrix, Vec<Vec<usize>>) {
-        let mut m = self.build_matrix();
-        let solutions = m.solve();
-        return (m, solutions);
+    pub fn row(&self, row: usize) -> Vec<usize> {
+        self.solver.row(row)
     }
 
-    pub fn solution(&self, m: Matrix, solution: Vec<usize>) -> Vec<Tile> {
+    pub fn solution_tiles(&self, solution: Vec<usize>) -> Vec<Tile> {
         let mut tiles: Vec<Tile> = Vec::new();
 
         for r in solution {
-            let indices = m.row(r);
+            let indices = self.solver.row(r);
 
+            let tile_idx = indices.last().unwrap() - 1 - self.len();
+            let name = &self.tiles[tile_idx].name;
             let mut points: Vec<Point> = Vec::new();
-            let mut name = "";
-            for i in indices {
-                if i < self.board.len() {
-                    points.push(self.board.points[i].clone());
-                } else {
-                    name = &self.tiles[i].name;
-                }
+            for i in 0..(indices.len() - 1) {
+                points.push(self.board.points[indices[i] - 1].clone());
             }
+
             tiles.push(Tile {
                 name: name.to_string(),
                 points: points,
@@ -335,10 +339,13 @@ impl Game {
 
 #[cfg(test)]
 mod test {
+    use algox::algox::IterativeSolver;
+
     use super::Game;
     use super::Point;
     use super::Size;
     use super::Tile;
+    use super::build_matrix;
 
     #[test]
     fn point() {
@@ -414,13 +421,16 @@ mod test {
         tiles.push(Tile::from_str("T1", "xx\nx"));
         tiles.push(Tile::from_str("T2", "x"));
 
+        let matrix = build_matrix(&board, &tiles);
+
         let mut game = Game {
             board: board,
             tiles: tiles,
+            solver: IterativeSolver::new(matrix),
         };
 
-        let (m, solutions) = game.solve();
-        assert_eq!(solutions.len(), 4);
+        let solution = game.solve().unwrap();
+        assert_eq!(solution.len(), 2);
     }
 
     #[test]
@@ -435,15 +445,87 @@ mod test {
             Tile::from_str("P2", "xxx\nxx "),
         ];
 
+        let matrix = build_matrix(&board, &tiles);
+
         let mut game = Game {
             board: board,
             tiles: tiles,
+            solver: IterativeSolver::new(matrix),
         };
         assert_eq!(game.len(), 20);
 
-        let (m, solutions) = game.solve();
-        assert_eq!(solutions.len(), 48);
+        let solution = game.solve().unwrap();
 
-        assert_eq!(solutions[0], vec!(25, 457, 997, 1315));
+        assert_eq!(solution, vec!(25, 457, 997, 1315));
+    }
+
+    #[test]
+    fn solution_tiles() {
+        // From string
+        let board = Tile::from_str("Board", "xxxxx\nxxxxx\nxxxxx\nxxxxx");
+
+        let tiles: Vec<Tile> = vec![
+            Tile::from_str("T1", "xxxx\n x  "),
+            Tile::from_str("T2", "xxxx\n x  "),
+            Tile::from_str("P1", "xxx\nxx "),
+            Tile::from_str("P2", "xxx\nxx "),
+        ];
+
+        let matrix = build_matrix(&board, &tiles);
+
+        let mut game = Game {
+            board: board,
+            tiles: tiles,
+            solver: IterativeSolver::new(matrix),
+        };
+
+        let solution = game.solve().unwrap();
+        let solution_tiles = game.solution_tiles(solution);
+
+        assert_eq!(
+            solution_tiles,
+            vec![
+                Tile {
+                    name: String::from("P1"),
+                    points: vec![
+                        Point { x: 0, y: 0 },
+                        Point { x: 0, y: 1 },
+                        Point { x: 0, y: 2 },
+                        Point { x: 1, y: 0 },
+                        Point { x: 1, y: 1 }
+                    ]
+                },
+                Tile {
+                    name: String::from("P2"),
+                    points: vec![
+                        Point { x: 2, y: 0 },
+                        Point { x: 2, y: 1 },
+                        Point { x: 2, y: 2 },
+                        Point { x: 3, y: 0 },
+                        Point { x: 3, y: 1 }
+                    ]
+                },
+                Tile {
+                    name: String::from("T1"),
+                    points: vec![
+                        Point { x: 0, y: 3 },
+                        Point { x: 1, y: 2 },
+                        Point { x: 1, y: 3 },
+                        Point { x: 2, y: 3 },
+                        Point { x: 3, y: 3 }
+                    ]
+                },
+                Tile {
+                    name: String::from("T2"),
+                    points: vec![
+                        Point { x: 3, y: 2 },
+                        Point { x: 4, y: 0 },
+                        Point { x: 4, y: 1 },
+                        Point { x: 4, y: 2 },
+                        Point { x: 4, y: 3 }
+                    ]
+                }
+            ]
+        );
     }
 }
