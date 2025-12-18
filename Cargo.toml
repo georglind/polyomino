@@ -2,14 +2,14 @@
 name = "polyomino"
 version = "0.1.0"
 authors = ["Kim Georg Lind Pedersen <georglind@gmail.com>"]
-description = "Solve polyomino puzzles using Knuth's Dancing Links"
+description = "Solve polyomino puzzles using Knuth's algorithm X with the dancing links optimization"
 edition = "2024"
 
 [lib]
 crate-type = ["cdylib"]
 
 [dependencies]
-algox = { path = "../algox" }
+algox = { git = "https://github.com/georglind/algox.git" }
 wasm-bindgen = "0.2.100"
 
 
